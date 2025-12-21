@@ -33,6 +33,8 @@ go get github.com/michcald/nrf24
 
 ## Quick Start
 
+### Receiver
+
 ```go
 package main
 
@@ -44,35 +46,50 @@ import (
 )
 
 func main() {
-	// 1. Configure the radio
 	config := nrf24.Config{
-		ChannelNumber:        76,
-		CePin:                25,
-		IrqPin:               24, // Optional: Enable interrupt support
-		DataRate:             nrf24.DataRate1mbps,
-		EnableAutoAck:        true,
-		EnableDynamicPayload: true,
-		RxAddr:               nrf24.Address{0xE7, 0xE7, 0xE7, 0xE7, 0xE7},
+		ChannelNumber: 76,
+		CePin:         25,
+		IrqPin:        24, 
+		RxAddr:        nrf24.Address{0xE7, 0xE7, 0xE7, 0xE7, 0xE7},
 	}
 
-	// 2. Initialize (opens GPIO/SPI and configures the hardware)
-	radio, err := nrf24.New(config)
-	if err != nil {
-		log.Fatalf("Failed to initialize: %v", err)
-	}
-	defer radio.Close() // Properly releases pins and powers down radio
+	radio, _ := nrf24.New(config)
+	defer radio.Close()
 
-	// 3. Transmit a message
+	fmt.Println("Listening...")
+	// Efficiently block until a packet arrives
+	pkt, _ := radio.ReceiveBlocking(context.Background())
+	fmt.Printf("Received: %s\n", string(pkt))
+}
+```
+
+### Transmitter
+
+```go
+package main
+
+import (
+	"fmt"
+	"log"
+	"github.com/michcald/nrf24"
+)
+
+func main() {
+	config := nrf24.Config{
+		ChannelNumber: 76,
+		CePin:         25,
+		// IRQ not strictly needed for basic TX, but good for error handling
+	}
+
+	radio, _ := nrf24.New(config)
+	defer radio.Close()
+
 	target := nrf24.Address{0xE7, 0xE7, 0xE7, 0xE7, 0xE7}
-	err = radio.Transmit(target, []byte("Hello Go!"))
+	err := radio.Transmit(target, []byte("Hello Go!"))
 	if err != nil {
-		fmt.Printf("Transmit error: %v\n", err)
-	}
-
-	// 4. Receive a message (blocking efficiently using IRQ)
-	pkt, err := radio.ReceiveBlocking(context.Background())
-	if err == nil {
-		fmt.Printf("Received: %s\n", string(pkt))
+		fmt.Printf("Transmit failed: %v\n", err)
+	} else {
+		fmt.Println("Message sent!")
 	}
 }
 ```
