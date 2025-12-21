@@ -19,20 +19,31 @@ jobs:
 
   release:
     needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     runs-on: ubuntu-latest
     permissions:
       contents: write
       issues: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # This creates the configuration file temporarily in the runner environment
+      - name: Generate Semantic Release Config
+        run: |
+          echo '{
+            "branches": ["main", "master"],
+            "plugins": [
+              "@semantic-release/commit-analyzer",
+              "@semantic-release/release-notes-generator",
+              "@semantic-release/github"
+            ]
+          }' > .releaserc
+
       - name: Semantic Release
         uses: cycjimmy/semantic-release-action@v4
-        with:
-          extra_plugins: |
-            @semantic-release/commit-analyzer
-            @semantic-release/release-notes-generator
-            @semantic-release/github
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
