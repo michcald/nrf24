@@ -80,6 +80,13 @@ func TestInitialization(t *testing.T) {
 		Logger:        &nopLogger{}, // Silence logs
 	}
 
+	// Queue responses for Init sequence (16 writes + 1 read)
+	// The 17th operation is the verification read of RF_CH.
+	for i := 0; i < 16; i++ {
+		mockSPI.queueRx([]byte{0})
+	}
+	mockSPI.queueRx([]byte{0x00, 76})
+
 	// Call NewWithHardware
 	dev, err := NewWithHardware(cfg, mockSPI, mockCE, mockIRQ)
 	if err != nil {
