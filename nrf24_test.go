@@ -3,38 +3,33 @@ package nrf24
 import (
 	"bytes"
 	"testing"
-
-	"periph.io/x/conn/v3/gpio"
-	"periph.io/x/conn/v3"
-	"periph.io/x/conn/v3/physic"
-	"periph.io/x/conn/v3/spi"
 )
 
 // --- Mocks ---
 
 type mockPin struct {
 	mode   string
-	level  gpio.Level
+	level  Level
 	pullUp bool
 }
 
-func (m *mockPin) Out(l gpio.Level) error {
+func (m *mockPin) Out(l Level) error {
 	m.mode = "output"
 	m.level = l
 	return nil
 }
 
-func (m *mockPin) In(pull gpio.Pull, edge gpio.Edge) error {
+func (m *mockPin) In(pull Pull) error {
 	m.mode = "input"
-	if pull == gpio.PullUp {
+	if pull == PullUp {
 		m.pullUp = true
 	}
 	return nil
 }
 
-func (m *mockPin) Read() gpio.Level { return m.level }
+func (m *mockPin) Read() Level { return m.level }
 
-func (m *mockPin) Watch(edge gpio.Edge, handler func()) error { return nil }
+func (m *mockPin) Watch(edge Edge, handler func()) error { return nil }
 func (m *mockPin) Unwatch() error                         { return nil }
 
 type mockSPIConn struct {
@@ -56,6 +51,11 @@ func (m *mockSPIConn) Tx(w, r []byte) error {
 			n = len(nextRx)
 		}
 		copy(r, nextRx[:n])
+	} else {
+		// If no response queued, fill r with zeros (simulate MISO low)
+		for i := range r {
+			r[i] = 0
+		}
 	}
 	return nil
 }
@@ -63,15 +63,6 @@ func (m *mockSPIConn) Tx(w, r []byte) error {
 func (m *mockSPIConn) queueRx(data []byte) {
 	m.rxQueue = append(m.rxQueue, data)
 }
-
-func (m *mockSPIConn) Duplex() conn.Duplex { return conn.Full }
-func (m *mockSPIConn) TxPackets(p []spi.Packet) error { return nil }
-func (m *mockSPIConn) String() string { return "mockSPI" }
-func (m *mockSPIConn) Close() error { return nil }
-func (m *mockSPIConn) Connect(f physic.Frequency, mode spi.Mode, bits int) (spi.Conn, error) {
-	return m, nil
-}
-func (m *mockSPIConn) LimitSpeed(f physic.Frequency) error { return nil }
 
 
 // --- Tests ---
@@ -89,10 +80,10 @@ func TestInitialization(t *testing.T) {
 		Logger:        &nopLogger{}, // Silence logs
 	}
 
-	// Call newDriver
-	dev, err := newDriver(cfg, mockSPI, mockCE, mockIRQ)
+	// Call NewWithHardware
+	dev, err := NewWithHardware(cfg, mockSPI, mockCE, mockIRQ)
 	if err != nil {
-		t.Fatalf("newDriver failed: %v", err)
+		t.Fatalf("NewWithHardware failed: %v", err)
 	}
 
 	// Verify CE was set to Output and started Low
@@ -121,7 +112,7 @@ func TestInitialization(t *testing.T) {
 	}
 
 	// Verify CE is High at the end (Listening)
-	if mockCE.level != gpio.High {
+	if mockCE.level != High {
 		t.Errorf("Expected CE to be High (Listening) after init, got %v", mockCE.level)
 	}
 
@@ -133,7 +124,7 @@ func TestTransmit(t *testing.T) {
 	mockCE := &mockPin{}
 	cfg := Config{Logger: &nopLogger{}}
 	
-	dev, _ := newDriver(cfg, mockSPI, mockCE, nil)
+	dev, _ := NewWithHardware(cfg, mockSPI, mockCE, nil)
 	
 	// Reset TX buffer to clear init commands
 	mockSPI.tx = nil
@@ -184,7 +175,7 @@ func TestTransmitFailure(t *testing.T) {
 	mockSPI := &mockSPIConn{}
 	mockCE := &mockPin{}
 	cfg := Config{Logger: &nopLogger{}}
-	dev, _ := newDriver(cfg, mockSPI, mockCE, nil)
+	dev, _ := NewWithHardware(cfg, mockSPI, mockCE, nil)
 
 	// Test Case 1: Max Retries reached (_MAX_RT = 0x10)
 	mockSPI.tx = nil
@@ -232,7 +223,7 @@ func TestReceive(t *testing.T) {
 		EnableDynamicPayload: true,
 	}
 	
-	dev, _ := newDriver(cfg, mockSPI, mockCE, nil)
+	dev, _ := NewWithHardware(cfg, mockSPI, mockCE, nil)
 	mockSPI.tx = nil
 
 	// Simulation for Receive():
@@ -268,7 +259,7 @@ func TestReceive(t *testing.T) {
 func TestConfiguration(t *testing.T) {
 	mockSPI := &mockSPIConn{}
 	cfg := Config{Logger: &nopLogger{}}
-	dev, _ := newDriver(cfg, mockSPI, &mockPin{}, nil)
+	dev, _ := NewWithHardware(cfg, mockSPI, &mockPin{}, nil)
 
 	// Test SetChannel
 	mockSPI.tx = nil
@@ -295,7 +286,7 @@ func TestOpenRxPipe(t *testing.T) {
 		Logger:        &nopLogger{},
 		EnableAutoAck: true,
 	}
-	dev, _ := newDriver(cfg, mockSPI, &mockPin{}, nil)
+	dev, _ := NewWithHardware(cfg, mockSPI, &mockPin{}, nil)
 
 	// Test Pipe 1 (Full Address)
 	mockSPI.tx = nil
@@ -341,7 +332,7 @@ func TestReceiveFixed(t *testing.T) {
 		EnableDynamicPayload: false,
 		PayloadSize:          5,
 	}
-	dev, _ := newDriver(cfg, mockSPI, &mockPin{}, nil)
+	dev, _ := NewWithHardware(cfg, mockSPI, &mockPin{}, nil)
 	mockSPI.tx = nil
 
 	// Simulation for Receive() with Fixed Payload:
@@ -368,7 +359,7 @@ func TestReceiveFixed(t *testing.T) {
 func TestCloseRxPipe(t *testing.T) {
 	mockSPI := &mockSPIConn{}
 	cfg := Config{Logger: &nopLogger{}}
-	dev, _ := newDriver(cfg, mockSPI, &mockPin{}, nil)
+	dev, _ := NewWithHardware(cfg, mockSPI, &mockPin{}, nil)
 	mockSPI.tx = nil
 	mockSPI.rxQueue = nil
 
@@ -398,7 +389,7 @@ func TestCloseRxPipe(t *testing.T) {
 func TestDiagnostics(t *testing.T) {
 	mockSPI := &mockSPIConn{}
 	cfg := Config{Logger: &nopLogger{}}
-	dev, _ := newDriver(cfg, mockSPI, &mockPin{}, nil)
+	dev, _ := NewWithHardware(cfg, mockSPI, &mockPin{}, nil)
 	
 	// 1. FlushTX
 	mockSPI.tx = nil

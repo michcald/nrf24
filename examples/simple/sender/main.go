@@ -2,45 +2,34 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/michcald/nrf24"
 )
 
 func main() {
-	fmt.Println("Starting NRF24L01+ Sender...")
-
-	config := nrf24.Config{
-		ChannelNumber:        76,
-		CePin:                25,
-		DataRate:             nrf24.DataRate1mbps,
-		EnableAutoAck:        true,
-		EnableDynamicPayload: true,
-		RxAddr:               nrf24.Address{0xE7, 0xE7, 0xE7, 0xE7, 0xE7},
-	}
-
-	radio, err := nrf24.New(config)
+	radio, err := Setup()
 	if err != nil {
-		log.Fatalf("Failed to initialize radio: %v", err)
+		Log("Setup failed: " + err.Error())
+		return
 	}
 	defer radio.Close()
-
-	fmt.Printf("Radio initialized: %s\n", radio)
 
 	targetAddr := nrf24.Address{0xE7, 0xE7, 0xE7, 0xE7, 0xE7}
 	counter := 0
 
+	Log("Sending messages...\r\n")
+
 	for {
 		counter++
 		msg := fmt.Sprintf("Hello World %d", counter)
-		fmt.Printf("Sending: %s... ", msg)
+		Log("Sending: " + msg + "... ")
 
 		err := radio.Transmit(targetAddr, []byte(msg))
 		if err != nil {
-			fmt.Printf("Failed: %v\n", err)
+			Log("Failed: " + err.Error() + "\r\n")
 		} else {
-			fmt.Printf("Success!\n")
+			Log("Success!\r\n")
 		}
 
 		time.Sleep(1 * time.Second)

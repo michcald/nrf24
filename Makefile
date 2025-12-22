@@ -1,10 +1,15 @@
-.PHONY: test build lint fmt clean
+.PHONY: test lint fmt clean build-periph build-tinygo
 
 test:
 	go test -v ./...
 
-build:
-	go build ./...
+build-periph:
+	go build -o /dev/null ./examples/simple/sender
+	go build -o /dev/null ./examples/simple/receiver
+
+build-tinygo:
+	tinygo build -target=pico2 -o /dev/null ./examples/simple/sender
+	tinygo build -target=pico2 -o /dev/null ./examples/simple/receiver
 
 lint:
 	go vet ./...
