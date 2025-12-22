@@ -4,15 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"time"
-
-	"periph.io/x/conn/v3/gpio"
-	"periph.io/x/conn/v3/gpio/gpioreg"
-	"periph.io/x/conn/v3/physic"
-	"periph.io/x/conn/v3/spi"
-	"periph.io/x/conn/v3/spi/spireg"
-	"periph.io/x/host/v3"
 )
 
 var (
@@ -219,88 +213,20 @@ type Config struct {
 	CRCLength CRCLength
 }
 
-type NRF24RPI struct {
+type Device struct {
 	config  Config
 	logger  Logger
-	conn    spi.Conn
-	ce      pin
-	irq     pin
+	conn    SPI
+	ce      Pin
+	irq     Pin
 	irqChan chan struct{}
-	nrfPort spi.PortCloser
+	nrfPort io.Closer
 	mu      sync.Mutex
+	scratch [33]byte // Max payload (32) + 1 status byte
 }
 
-// New creates and initializes a new NRF24L01 driver.
-// It applies configuration defaults, initializes the GPIO and SPI interfaces,
-// and configures the radio module.
-// It returns the initialized driver or an error if hardware initialization fails.
-func New(c Config) (*NRF24RPI, error) {
-	// 1. Initialize periph.io host (Required for both SPI and GPIO)
-	if _, err := host.Init(); err != nil {
-		return nil, fmt.Errorf("failed to initialize periph.io host: %w", err)
-	}
-
-	// 2. Default SPI Path
-	if c.SpiBusPath == "" {
-		c.SpiBusPath = "/dev/spidev0.0"
-	}
-
-	// 3. Open the SPI Port
-	p, err := spireg.Open(c.SpiBusPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open SPI port: %w", err)
-	}
-
-	// 4. Default Clock
-	if c.SpiClockHz == 0 {
-		c.SpiClockHz = 1000000
-	}
-
-	// 5. Create the SPI Connection (Mode 0, 8 bits)
-	conn, err := p.Connect(physic.Frequency(c.SpiClockHz)*physic.Hertz, spi.Mode0, 8)
-	if err != nil {
-		p.Close()
-		return nil, fmt.Errorf("failed to create SPI connection: %w", err)
-	}
-
-	// 6. Setup CE Pin
-	if c.CePin == 0 {
-		c.CePin = 25
-	}
-	ceName := fmt.Sprintf("GPIO%d", c.CePin)
-	realCe := gpioreg.ByName(ceName)
-	if realCe == nil {
-		p.Close()
-		return nil, fmt.Errorf("failed to open CE pin %s", ceName)
-	}
-	ceWrapper := &realPin{PinIO: realCe}
-
-	// 7. Setup IRQ Pin
-	var irqWrapper pin
-	if c.IrqPin != 0 {
-		irqName := fmt.Sprintf("GPIO%d", c.IrqPin)
-		realIrq := gpioreg.ByName(irqName)
-		if realIrq == nil {
-			p.Close()
-			return nil, fmt.Errorf("failed to open IRQ pin %s", irqName)
-		}
-		irqWrapper = &realPin{PinIO: realIrq}
-	}
-
-	// 8. Call internal constructor
-	dev, err := newDriver(c, conn, ceWrapper, irqWrapper)
-	if err != nil {
-		p.Close()
-		return nil, err
-	}
-	
-	// Store the port closer so we can close it later
-	dev.nrfPort = p
-	return dev, nil
-}
-
-// newDriver is the internal constructor that allows dependency injection for testing.
-func newDriver(c Config, conn spi.Conn, ce pin, irq pin) (*NRF24RPI, error) {
+// NewWithHardware creates and initializes a new NRF24L01 driver with the provided hardware interfaces.
+func NewWithHardware(c Config, conn SPI, ce Pin, irq Pin) (*Device, error) {
 	if !c.EnableDynamicPayload && (c.PayloadSize == 0 || c.PayloadSize > 32) {
 		c.PayloadSize = 32
 	}
@@ -335,7 +261,7 @@ func newDriver(c Config, conn spi.Conn, ce pin, irq pin) (*NRF24RPI, error) {
 		logger = &stdLogger{}
 	}
 
-	dev := &NRF24RPI{
+	dev := &Device{
 		config: c,
 		logger: logger,
 		conn:   conn,
@@ -352,14 +278,14 @@ func newDriver(c Config, conn spi.Conn, ce pin, irq pin) (*NRF24RPI, error) {
 	dev.logger.Infof("Initializing NRF24L01 SPI communication...")
 
 	// Setup CE
-	dev.ce.Out(gpio.Low)
+	dev.ce.Out(Low)
 
 	// Setup IRQ if provided
 	if dev.irq != nil {
-		dev.irq.In(gpio.PullUp, gpio.NoEdge)
+		dev.irq.In(PullUp)
 		dev.irqChan = make(chan struct{}, 1)
 		// Watch starts a goroutine that calls the handler on edge
-		err := dev.irq.Watch(gpio.FallingEdge, func() {
+		err := dev.irq.Watch(FallingEdge, func() {
 			select {
 			case dev.irqChan <- struct{}{}:
 			default:
@@ -452,6 +378,14 @@ func newDriver(c Config, conn spi.Conn, ce pin, irq pin) (*NRF24RPI, error) {
 		dev.writeRegister(_RX_PW_P1, dev.config.PayloadSize)
 	}
 
+	// 10. Verify Connection
+	// Read back the channel to ensure SPI write/read is working
+	readChannel := dev.readRegister(_RF_CH)
+	if readChannel != dev.config.ChannelNumber {
+		dev.Close()
+		return nil, fmt.Errorf("failed to verify NRF24L01 connection: read channel %d, expected %d - check wiring/power", readChannel, dev.config.ChannelNumber)
+	}
+
 	dev.logger.Infof("NRF24L01 initialized and powered up. Ready to operate.")
 
 	// Set CE high to start listening ONLY after full configuration
@@ -460,7 +394,7 @@ func newDriver(c Config, conn spi.Conn, ce pin, irq pin) (*NRF24RPI, error) {
 	return dev, nil
 }
 
-func (d *NRF24RPI) String() string {
+func (d *Device) String() string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -477,7 +411,7 @@ func (d *NRF24RPI) String() string {
 // Close cleans up the resources used by the NRF24L01 driver.
 // It powers down the radio, closes the SPI connection, and releases GPIO pins.
 // This method is concurrent safe.
-func (dev *NRF24RPI) Close() error {
+func (dev *Device) Close() error {
 	dev.mu.Lock()
 	defer dev.mu.Unlock()
 
@@ -505,62 +439,67 @@ func (dev *NRF24RPI) Close() error {
 
 // --- NRF24L01 Core Functions (SPI interaction) ---
 
-func (d *NRF24RPI) spiTransfer(data []byte) (status byte, response []byte) {
-	tx := make([]byte, len(data))
-	copy(tx, data)
-	rx := make([]byte, len(data))
-
-	if err := d.conn.Tx(tx, rx); err != nil {
+func (d *Device) spiTransfer(len int) (status byte, response []byte) {
+	// Perform full-duplex transaction on the scratch buffer
+	// We use the same slice for read and write
+	slice := d.scratch[:len]
+	if err := d.conn.Tx(slice, slice); err != nil {
 		d.logger.Errorf("SPI Transfer Error: %v", err)
 		return 0, nil
 	}
 
-	if len(rx) > 0 {
-		return rx[0], rx[1:]
+	if len > 0 {
+		return d.scratch[0], d.scratch[1:len]
 	}
 	return 0, nil
 }
 
-func (d *NRF24RPI) writeRegister(reg, val byte) {
-	d.spiTransfer([]byte{_W_REGISTER | reg, val})
+func (d *Device) writeRegister(reg, val byte) {
+	d.scratch[0] = _W_REGISTER | reg
+	d.scratch[1] = val
+	d.spiTransfer(2)
 }
 
-func (d *NRF24RPI) readRegister(reg byte) byte {
-	_, data := d.spiTransfer([]byte{reg, _NOP})
+func (d *Device) readRegister(reg byte) byte {
+	d.scratch[0] = reg
+	d.scratch[1] = _NOP
+	_, data := d.spiTransfer(2)
 	if len(data) > 0 {
 		return data[0]
 	}
 	return 0
 }
 
-func (d *NRF24RPI) writeRegisterN(reg byte, data []byte) {
-	cmd := []byte{_W_REGISTER | reg}
-	cmd = append(cmd, data...)
-	d.spiTransfer(cmd)
+func (d *Device) writeRegisterN(reg byte, data []byte) {
+	d.scratch[0] = _W_REGISTER | reg
+	copy(d.scratch[1:], data)
+	d.spiTransfer(1 + len(data))
 }
 
-func (d *NRF24RPI) flushTX() {
-	d.spiTransfer([]byte{_FLUSH_TX})
+func (d *Device) flushTX() {
+	d.scratch[0] = _FLUSH_TX
+	d.spiTransfer(1)
 }
 
-func (d *NRF24RPI) flushRX() {
-	d.spiTransfer([]byte{_FLUSH_RX})
+func (d *Device) flushRX() {
+	d.scratch[0] = _FLUSH_RX
+	d.spiTransfer(1)
 }
 
-func (d *NRF24RPI) clearStatus() {
+func (d *Device) clearStatus() {
 	d.writeRegister(_STATUS, _RX_DR|_TX_DS|_MAX_RT)
 }
 
-func (d *NRF24RPI) setCE(level bool) {
+func (d *Device) setCE(level bool) {
 	if level {
-		d.ce.Out(gpio.High)
+		d.ce.Out(High)
 	} else {
-		d.ce.Out(gpio.Low)
+		d.ce.Out(Low)
 	}
 }
 
 // setTargetAddress is for changing dynamically the target address to send messages to
-func (d *NRF24RPI) setTargetAddress(addr Address) {
+func (d *Device) setTargetAddress(addr Address) {
 	d.setCE(false) // Ensure we are in standby
 	d.writeRegisterN(_TX_ADDR_REG, addr[:])
 
@@ -580,7 +519,7 @@ func (d *NRF24RPI) setTargetAddress(addr Address) {
 // This method automatically configures the payload size/type based on the current configuration.
 // Note: Pipe 0 is also used for receiving Auto-Ack packets. changing it might affect TX.
 // This method is concurrent safe.
-func (d *NRF24RPI) OpenRxPipe(pipeID int, address []byte) error {
+func (d *Device) OpenRxPipe(pipeID int, address []byte) error {
 	if pipeID < 0 || pipeID > 5 {
 		return fmt.Errorf("pipeID must be between 0 and 5")
 	}
@@ -641,7 +580,7 @@ func (d *NRF24RPI) OpenRxPipe(pipeID int, address []byte) error {
 
 // CloseRxPipe disables a specific data pipe (0-5).
 // This method is concurrent safe.
-func (d *NRF24RPI) CloseRxPipe(pipeID int) error {
+func (d *Device) CloseRxPipe(pipeID int) error {
 	if pipeID < 0 || pipeID > 5 {
 		return fmt.Errorf("pipeID must be between 0 and 5")
 	}
@@ -662,7 +601,7 @@ func (d *NRF24RPI) CloseRxPipe(pipeID int) error {
 // lostPackets: Number of packets lost (count resets when changing channel).
 // currentRetries: Number of retransmissions for the latest transmission.
 // This method is concurrent safe.
-func (d *NRF24RPI) GetRetransmissionCounters() (lostPackets byte, currentRetries byte) {
+func (d *Device) GetRetransmissionCounters() (lostPackets byte, currentRetries byte) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -676,7 +615,7 @@ func (d *NRF24RPI) GetRetransmissionCounters() (lostPackets byte, currentRetries
 // This is useful for checking if a channel is clear before transmitting or for
 // simple collision avoidance. On NRF24L01+, it detects signals > -64dBm.
 // This method is concurrent safe.
-func (d *NRF24RPI) IsCarrierDetected() bool {
+func (d *Device) IsCarrierDetected() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -686,7 +625,7 @@ func (d *NRF24RPI) IsCarrierDetected() bool {
 
 // FlushTX clears the transmit FIFO buffer.
 // This method is concurrent safe.
-func (d *NRF24RPI) FlushTX() {
+func (d *Device) FlushTX() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.flushTX()
@@ -694,7 +633,7 @@ func (d *NRF24RPI) FlushTX() {
 
 // FlushRX clears the receive FIFO buffer.
 // This method is concurrent safe.
-func (d *NRF24RPI) FlushRX() {
+func (d *Device) FlushRX() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.flushRX()
@@ -703,7 +642,7 @@ func (d *NRF24RPI) FlushRX() {
 // GetStatus reads the current value of the STATUS register.
 // This is useful for debugging or polling the radio state.
 // This method is concurrent safe.
-func (d *NRF24RPI) GetStatus() byte {
+func (d *Device) GetStatus() byte {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.readRegister(_STATUS)
@@ -712,7 +651,7 @@ func (d *NRF24RPI) GetStatus() byte {
 // SetChannel changes the radio channel (frequency).
 // channel must be between 0 and 124.
 // This method is concurrent safe.
-func (d *NRF24RPI) SetChannel(channel byte) error {
+func (d *Device) SetChannel(channel byte) error {
 	if channel > 124 {
 		return fmt.Errorf("channel number must be between 0 and 124")
 	}
@@ -726,7 +665,7 @@ func (d *NRF24RPI) SetChannel(channel byte) error {
 
 // SetDataRate changes the air data rate.
 // This method is concurrent safe.
-func (d *NRF24RPI) SetDataRate(rate DataRate) error {
+func (d *Device) SetDataRate(rate DataRate) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -736,7 +675,7 @@ func (d *NRF24RPI) SetDataRate(rate DataRate) error {
 
 // SetPALevel changes the power amplifier level.
 // This method is concurrent safe.
-func (d *NRF24RPI) SetPALevel(level PALevel) error {
+func (d *Device) SetPALevel(level PALevel) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -748,7 +687,7 @@ func (d *NRF24RPI) SetPALevel(level PALevel) error {
 // delay: 250 to 4000 microseconds (must be multiple of 250).
 // count: 0 to 15 retransmits.
 // This method is concurrent safe.
-func (d *NRF24RPI) SetAutoRetransmit(delay uint16, count byte) error {
+func (d *Device) SetAutoRetransmit(delay uint16, count byte) error {
 	if delay < 250 || delay > 4000 || delay%250 != 0 {
 		return fmt.Errorf("delay must be between 250 and 4000 us and multiple of 250")
 	}
@@ -770,7 +709,7 @@ func (d *NRF24RPI) SetAutoRetransmit(delay uint16, count byte) error {
 
 // updateRFSetup writes the RF_SETUP register based on current config.
 // Call with lock held.
-func (d *NRF24RPI) updateRFSetup() error {
+func (d *Device) updateRFSetup() error {
 	var rfSetup byte
 	switch d.config.DataRate {
 	case DataRate1mbps:
@@ -800,7 +739,7 @@ func (d *NRF24RPI) updateRFSetup() error {
 // In this mode, the radio is disabled with minimal current consumption (approx. 900nA).
 // This is useful for battery-powered applications when the radio is not in use.
 // This method is concurrent safe.
-func (d *NRF24RPI) PowerDown() {
+func (d *Device) PowerDown() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.writeRegister(_CONFIG, d.readRegister(_CONFIG)&^byte(_PWR_UP))
@@ -810,14 +749,14 @@ func (d *NRF24RPI) PowerDown() {
 // After calling PowerUp, it takes approximately 1.5ms for the crystal oscillator to stabilize
 // before the radio can enter Standby or RX/TX modes.
 // This method is concurrent safe.
-func (d *NRF24RPI) PowerUp() {
+func (d *Device) PowerUp() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.writeRegister(_CONFIG, d.readRegister(_CONFIG)|_PWR_UP)
 	time.Sleep(2 * time.Millisecond) // Wait for oscillator stabilization
 }
 
-func (d *NRF24RPI) startListening() {
+func (d *Device) startListening() {
 	d.setCE(false)
 	d.writeRegister(_CONFIG, d.readRegister(_CONFIG)|_PRIM_RX)
 	d.setCE(true)
@@ -826,20 +765,22 @@ func (d *NRF24RPI) startListening() {
 	d.flushRX()
 }
 
-func (d *NRF24RPI) stopListening() {
+func (d *Device) stopListening() {
 	d.setCE(false)
 	d.writeRegister(_CONFIG, d.readRegister(_CONFIG) & ^byte(_PRIM_RX))
 }
 
 // --- NRF24L01 Read/Write ---
 
-func (d *NRF24RPI) available() bool {
+func (d *Device) available() bool {
 	return ((d.readRegister(_STATUS) >> 1) & 0x07) != 7
 }
 
-func (d *NRF24RPI) getDynamicPayloadSize() byte {
+func (d *Device) getDynamicPayloadSize() byte {
 	// Send command 0x60 and a NOP to get the 1-byte response
-	_, data := d.spiTransfer([]byte{_R_RX_PL_WID, _NOP})
+	d.scratch[0] = _R_RX_PL_WID
+	d.scratch[1] = _NOP
+	_, data := d.spiTransfer(2)
 	if len(data) > 0 {
 		if data[0] > 32 { // Hardware bug/noise check
 			d.flushRX()
@@ -850,7 +791,7 @@ func (d *NRF24RPI) getDynamicPayloadSize() byte {
 	return 0
 }
 
-func (d *NRF24RPI) readDynamic() ([]byte, bool) {
+func (d *Device) readDynamic() ([]byte, bool) {
 	if !d.available() {
 		return nil, false
 	}
@@ -858,62 +799,77 @@ func (d *NRF24RPI) readDynamic() ([]byte, bool) {
 	// 1. Ask the radio how big the current packet is
 	size := d.getDynamicPayloadSize()
 	if size == 0 {
+		// If the radio says data is available but the size is 0, it's either an empty packet
+		// or a glitch. In either case, we must remove it from the FIFO or we will loop forever.
+		// Since we can't "read" 0 bytes to advance the FIFO, we flush.
+		d.flushRX()
+		d.clearStatus()
 		return nil, false
 	}
 
 	// 2. Read exactly that many bytes
-	cmd := make([]byte, size+1)
-	cmd[0] = _R_RX_PAYLOAD
+	d.scratch[0] = _R_RX_PAYLOAD
 	for i := 1; i <= int(size); i++ {
-		cmd[i] = _NOP
+		d.scratch[i] = _NOP
 	}
 
-	_, data := d.spiTransfer(cmd)
+	_, data := d.spiTransfer(int(size) + 1)
+
+	// Copy result to safe buffer BEFORE calling clearStatus which reuses scratch
+	result := make([]byte, len(data))
+	copy(result, data)
 
 	d.clearStatus()
-	return data, true
+	
+	return result, true
 }
 
-func (d *NRF24RPI) readFixedPayload() ([]byte, bool) {
+func (d *Device) readFixedPayload() ([]byte, bool) {
 	if !d.available() {
 		return nil, false
 	}
 
 	size := int(d.config.PayloadSize)
 	// Read exactly size bytes
-	cmd := make([]byte, size+1)
-	cmd[0] = _R_RX_PAYLOAD
+	d.scratch[0] = _R_RX_PAYLOAD
 	for i := 1; i <= size; i++ {
-		cmd[i] = _NOP
+		d.scratch[i] = _NOP
 	}
 
-	_, data := d.spiTransfer(cmd)
+	_, data := d.spiTransfer(size + 1)
+
+	// Copy result to safe buffer BEFORE calling clearStatus which reuses scratch
+	result := make([]byte, len(data))
+	copy(result, data)
 
 	d.clearStatus()
 
-	return data, true
+	return result, true
 }
 
-func (d *NRF24RPI) write(data []byte, noAck bool) error {
+func (d *Device) write(data []byte, noAck bool) error {
 	d.stopListening()
 
-	var cmd []byte
 	cmdPrefix := byte(_W_TX_PAYLOAD)
 	if noAck {
 		cmdPrefix = _W_TX_PAYLOAD_NOACK
 	}
 
+	d.scratch[0] = cmdPrefix
+	
 	if d.config.EnableDynamicPayload {
-		cmd = []byte{cmdPrefix}
-		cmd = append(cmd, data...)
+		copy(d.scratch[1:], data)
+		d.spiTransfer(1 + len(data))
 	} else {
 		// For fixed payload, ensure it's always d.config.PayloadSize
-		fixedPayload := make([]byte, d.config.PayloadSize)
-		copy(fixedPayload, data) // Copy up to len(data), rest will be zeros
-		cmd = []byte{cmdPrefix}
-		cmd = append(cmd, fixedPayload...)
+		// We need to clear the scratch buffer first to ensure padding is 0
+		size := int(d.config.PayloadSize)
+		for i := 1; i <= size; i++ {
+			d.scratch[i] = 0
+		}
+		copy(d.scratch[1:], data) // Copy up to len(data), rest will be zeros
+		d.spiTransfer(1 + size)
 	}
-	d.spiTransfer(cmd)
 
 	d.setCE(true)
 	time.Sleep(15 * time.Microsecond)
@@ -949,7 +905,7 @@ func (d *NRF24RPI) write(data []byte, noAck bool) error {
 // Transmit sends a message.
 // This method is concurrent safe.
 // It returns an error if you are trying to send a message bigger than the max payload size.
-func (dev *NRF24RPI) Transmit(destAddr Address, p []byte) error {
+func (dev *Device) Transmit(destAddr Address, p []byte) error {
 	dev.mu.Lock()
 	defer dev.mu.Unlock()
 
@@ -982,7 +938,7 @@ func (dev *NRF24RPI) Transmit(destAddr Address, p []byte) error {
 // data: The payload data (1-32 bytes).
 // Note: EnableDynamicPayload must be true for this feature to work.
 // This method is concurrent safe.
-func (d *NRF24RPI) WriteAckPayload(pipeID int, data []byte) error {
+func (d *Device) WriteAckPayload(pipeID int, data []byte) error {
 	if !d.config.EnableAutoAck {
 		return fmt.Errorf("AckPayloads require EnableAutoAck to be true")
 	}
@@ -999,9 +955,9 @@ func (d *NRF24RPI) WriteAckPayload(pipeID int, data []byte) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	cmd := []byte{_W_ACK_PAYLOAD | byte(pipeID)}
-	cmd = append(cmd, data...)
-	d.spiTransfer(cmd)
+	d.scratch[0] = _W_ACK_PAYLOAD | byte(pipeID)
+	copy(d.scratch[1:], data)
+	d.spiTransfer(1 + len(data))
 	
 	return nil
 }
@@ -1012,7 +968,7 @@ func (d *NRF24RPI) WriteAckPayload(pipeID int, data []byte) error {
 // to multiple receivers or for high-speed, low-reliability data as it prevents receivers
 // from wasting power and airtime sending ACKs that the transmitter isn't listening for.
 // This method is concurrent safe.
-func (dev *NRF24RPI) TransmitNoAck(destAddr Address, p []byte) error {
+func (dev *Device) TransmitNoAck(destAddr Address, p []byte) error {
 	dev.mu.Lock()
 	defer dev.mu.Unlock()
 
@@ -1040,7 +996,7 @@ func (dev *NRF24RPI) TransmitNoAck(destAddr Address, p []byte) error {
 
 // SetAddressWidth sets the address width (3, 4, or 5 bytes).
 // This method is concurrent safe.
-func (d *NRF24RPI) SetAddressWidth(width byte) error {
+func (d *Device) SetAddressWidth(width byte) error {
 	if width < 3 || width > 5 {
 		return fmt.Errorf("AddressWidth must be 3, 4, or 5")
 	}
@@ -1056,7 +1012,7 @@ func (d *NRF24RPI) SetAddressWidth(width byte) error {
 // This method is non-blocking and assumes the radio has been put into receive mode (e.g., by calling Start).
 // It returns the packet and true if a message is available, otherwise returns an empty packet and false.
 // This method is concurrent safe.
-func (dev *NRF24RPI) Receive() ([]byte, bool) {
+func (dev *Device) Receive() ([]byte, bool) {
 	dev.mu.Lock()
 	defer dev.mu.Unlock()
 
@@ -1078,13 +1034,13 @@ func (dev *NRF24RPI) Receive() ([]byte, bool) {
 // It returns the content of the STATUS register.
 // If IrqPin is not configured, it returns an error.
 // This method is concurrent safe.
-func (d *NRF24RPI) WaitForInterrupt(ctx context.Context) (byte, error) {
+func (d *Device) WaitForInterrupt(ctx context.Context) (byte, error) {
 	if d.irq == nil {
 		return 0, fmt.Errorf("IRQ pin not configured")
 	}
 
 	// Check if interrupt is already active (low = false)
-	if d.irq.Read() == gpio.Low {
+	if d.irq.Read() == Low {
 		d.mu.Lock()
 		status := d.readRegister(_STATUS)
 		d.mu.Unlock()
@@ -1106,7 +1062,7 @@ func (d *NRF24RPI) WaitForInterrupt(ctx context.Context) (byte, error) {
 // ReceiveBlocking waits for a packet to arrive or for the context to be cancelled.
 // It blocks efficiently using the IRQ pin if configured, or falls back to polling.
 // This method is concurrent safe.
-func (d *NRF24RPI) ReceiveBlocking(ctx context.Context) ([]byte, error) {
+func (d *Device) ReceiveBlocking(ctx context.Context) ([]byte, error) {
 	for {
 		// Check for cancellation
 		select {
@@ -1137,21 +1093,23 @@ func (d *NRF24RPI) ReceiveBlocking(ctx context.Context) ([]byte, error) {
 			d.clearInterrupts(status)
 		} else {
 			// Polling fallback
-			t := time.NewTimer(5 * time.Millisecond)
+			// Check context cancellation before sleeping
 			select {
-			case <-t.C:
 			case <-ctx.Done():
-				t.Stop()
 				return nil, ctx.Err()
+			default:
+				// Fall through
 			}
-			t.Stop()
+			
+			// Use Sleep instead of time.NewTimer/time.After to avoid heap allocation overhead
+			time.Sleep(5 * time.Millisecond)
 		}
 	}
 }
 
 // clearInterrupts clears the specified interrupt flags in the STATUS register.
 // This is concurrent safe.
-func (d *NRF24RPI) clearInterrupts(flags byte) {
+func (d *Device) clearInterrupts(flags byte) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	// Write 1 to clear bits
@@ -1160,7 +1118,7 @@ func (d *NRF24RPI) clearInterrupts(flags byte) {
 
 // Ping sends a ping to a specific address.
 // This method is concurrent safe.
-func (d *NRF24RPI) Ping(_ context.Context, addr Address) (bool, error) {
+func (d *Device) Ping(_ context.Context, addr Address) (bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
