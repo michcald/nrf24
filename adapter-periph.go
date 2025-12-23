@@ -158,7 +158,12 @@ func New(c Config) (*Device, error) {
 	}
 
 	// 8. Call internal constructor
-	dev, err := NewWithHardware(c, conn, ceWrapper, irqWrapper)
+	hwConfig := HardwareConfig{
+		RadioConfig: c.RadioConfig,
+		CE:          ceWrapper,
+		IRQ:         irqWrapper,
+	}
+	dev, err := NewWithHardware(hwConfig, conn)
 	if err != nil {
 		p.Close()
 		return nil, err

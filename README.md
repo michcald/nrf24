@@ -86,6 +86,35 @@ func main() {
 }
 ```
 
+## Logging
+
+The library uses a global logger to provide feedback on hardware initialization and communication status. The default logger behavior depends on your environment:
+
+- **Linux (!tinygo)**: Uses the standard `log` package, printing to `stdout`.
+- **TinyGo**: Uses `machine.Serial` via `fmt.Fprintf` to output logs to the serial console.
+- **Tests**: Logging is disabled by default using a no-op logger.
+
+### Custom Logger
+
+You can provide your own logger implementation by satisfying the `Logger` interface and calling `SetLogger`:
+
+```go
+type MyLogger struct{}
+func (l *MyLogger) Debug(m string) { /* ... */ }
+func (l *MyLogger) Info(m string)  { /* ... */ }
+func (l *MyLogger) Warn(m string)  { /* ... */ }
+func (l *MyLogger) Error(m string) { /* ... */ }
+
+func init() {
+    nrf24.SetLogger(&MyLogger{})
+}
+```
+
+To disable logging entirely:
+```go
+nrf24.SetLogger(nil)
+```
+
 ## Hardware Setup
 
 The nRF24L01+ is sensitive to power quality. Follow these guidelines for reliable communication:

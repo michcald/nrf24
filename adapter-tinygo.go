@@ -89,5 +89,11 @@ func NewTinyGo(c Config, spi *machine.SPI, csPin, cePin, irqPin machine.Pin) (*D
 
 	spiWrapper := &tinygoSPI{spi: spi, cs: csPin}
 
-	return NewWithHardware(c, spiWrapper, ceWrapper, irqWrapper)
+	hwConfig := HardwareConfig{
+		RadioConfig: c.RadioConfig,
+		CE:          ceWrapper,
+		IRQ:         irqWrapper,
+	}
+
+	return NewWithHardware(hwConfig, spiWrapper)
 }

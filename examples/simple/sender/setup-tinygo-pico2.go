@@ -23,11 +23,13 @@ func Setup() (*nrf24.Device, error) {
 	}
 
 	config := nrf24.Config{
-		ChannelNumber:        76,
-		DataRate:             nrf24.DataRate1mbps,
-		EnableAutoAck:        true,
-		EnableDynamicPayload: true,
-		RxAddr:               nrf24.Address{0xD7, 0xD7, 0xD7, 0xD7, 0xD7},
+		RadioConfig: nrf24.RadioConfig{
+			ChannelNumber:        76,
+			DataRate:             nrf24.DataRate1mbps,
+			EnableAutoAck:        true,
+			EnableDynamicPayload: true,
+			RxAddr:               nrf24.Address{0xD7, 0xD7, 0xD7, 0xD7, 0xD7},
+		},
 	}
 
 	// Pins for Pico 2
