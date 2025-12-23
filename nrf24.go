@@ -198,22 +198,6 @@ type RadioConfig struct {
 	CRCLength CRCLength
 }
 
-type Config struct {
-	RadioConfig
-	// CePin is the GPIO pin number (BCM numbering) for the Chip Enable (CE) pin.
-	// Defaults to 25 if not provided.
-	CePin int
-	// IrqPin is the GPIO pin number (BCM numbering) for the Interrupt Request (IRQ) pin.
-	// Optional. If not provided, polling is used.
-	IrqPin int
-	// SpiBusPath is the path to the SPI bus (e.g., "/dev/spidev0.0").
-	// Defaults to "/dev/spidev0.0" if not provided.
-	SpiBusPath string
-	// SpiClockHz is the SPI clock frequency in Hz.
-	// Defaults to 1000000 (1MHz) if not provided.
-	SpiClockHz int
-}
-
 type HardwareConfig struct {
 	RadioConfig
 	// CE is the Chip Enable pin interface.

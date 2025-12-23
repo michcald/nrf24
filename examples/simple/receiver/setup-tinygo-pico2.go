@@ -36,18 +36,17 @@ func Setup() (*nrf24.Device, error) {
 			EnableDynamicPayload: true,
 			RxAddr:               nrf24.Address{0xE7, 0xE7, 0xE7, 0xE7, 0xE7},
 		},
+		SPI:    machine.SPI0,
+		CSPin:  machine.GP17,
+		CEPin:  machine.GP20,
+		IRQPin: machine.NoPin, // Use polling for debugging to rule out IRQ issues
 	}
 
 	time.Sleep(1 * time.Second)
-	// Pins for Pico 2
-	csPin := machine.GP17
-	cePin := machine.GP20
-	// irqPin := machine.GP21
-	irqPin := machine.NoPin // Use polling for debugging to rule out IRQ issues
 
 	machine.Serial.Write([]byte("Wiring: SCK=GP18, MOSI=GP19, MISO=GP16, CS=GP17, CE=GP20, IRQ=Not Used (Polling)\r\n"))
 
-	radio, err := nrf24.NewTinyGo(config, machine.SPI0, csPin, cePin, irqPin)
+	radio, err := nrf24.New(config)
 	if err != nil {
 		machine.Serial.Write([]byte("Failed to initialize radio\r\n"))
 		return nil, err

@@ -45,9 +45,11 @@ import (
 
 func main() {
 	config := nrf24.Config{
-		ChannelNumber: 76,
-		CePin:         25,
-		RxAddr:        nrf24.Address{0xE7, 0xE7, 0xE7, 0xE7, 0xE7},
+		RadioConfig: nrf24.RadioConfig{
+			ChannelNumber: 76,
+			RxAddr:        nrf24.Address{0xE7, 0xE7, 0xE7, 0xE7, 0xE7},
+		},
+		CePin: 25,
 	}
 
 	radio, _ := nrf24.New(config)
@@ -71,16 +73,20 @@ import (
 )
 
 func main() {
-    config := nrf24.Config{
-        ChannelNumber: 76,
-    }
-    
     // Initialize hardware via machine package
     machine.SPI0.Configure(machine.SPIConfig{})
-    cePin := machine.GP25
-    irqPin := machine.GP24
     
-    radio, _ := nrf24.NewTinyGo(config, machine.SPI0, cePin, irqPin)
+    config := nrf24.Config{
+        RadioConfig: nrf24.RadioConfig{
+            ChannelNumber: 76,
+        },
+        SPI:    machine.SPI0,
+        CSPin:  machine.GP17,
+        CEPin:  machine.GP20,
+        IRQPin: machine.GP21,
+    }
+    
+    radio, _ := nrf24.New(config)
     
     radio.ReceiveBlocking(context.Background())
 }

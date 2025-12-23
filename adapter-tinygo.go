@@ -74,20 +74,34 @@ func (s *tinygoSPI) Tx(w, r []byte) error {
 	return err
 }
 
-// NewTinyGo creates a new NRF24L01 driver for TinyGo systems.
-func NewTinyGo(c Config, spi *machine.SPI, csPin, cePin, irqPin machine.Pin) (*Device, error) {
-	// Configure CS pin as output and set high (inactive)
-	csPin.Configure(machine.PinConfig{Mode: machine.PinOutput})
-	csPin.High()
+// Config holds the configuration for the TinyGo driver.
+type Config struct {
+	RadioConfig
+	// SPI is the SPI bus to use.
+	SPI *machine.SPI
+	// CSPin is the Chip Select (CS) pin.
+	CSPin machine.Pin
+	// CEPin is the Chip Enable (CE) pin.
+	CEPin machine.Pin
+	// IRQPin is the Interrupt Request (IRQ) pin.
+	// Use machine.NoPin if not using interrupts.
+	IRQPin machine.Pin
+}
 
-	ceWrapper := &tinygoPin{pin: cePin}
+// New creates a new NRF24L01 driver for TinyGo systems.
+func New(c Config) (*Device, error) {
+	// Configure CS pin as output and set high (inactive)
+	c.CSPin.Configure(machine.PinConfig{Mode: machine.PinOutput})
+	c.CSPin.High()
+
+	ceWrapper := &tinygoPin{pin: c.CEPin}
 	
 	var irqWrapper Pin
-	if irqPin != machine.NoPin {
-		irqWrapper = &tinygoPin{pin: irqPin}
+	if c.IRQPin != machine.NoPin {
+		irqWrapper = &tinygoPin{pin: c.IRQPin}
 	}
 
-	spiWrapper := &tinygoSPI{spi: spi, cs: csPin}
+	spiWrapper := &tinygoSPI{spi: c.SPI, cs: c.CSPin}
 
 	hwConfig := HardwareConfig{
 		RadioConfig: c.RadioConfig,
