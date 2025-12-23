@@ -5,6 +5,8 @@
 
 A robust, idiomatic, and concurrent-safe Go library for interfacing with the nRF24L01+ 2.4GHz wireless transceiver.
 
+> **Note:** This library is under active development. Until v1.0.0, the public API may change.
+
 **nrf24** is designed from the ground up to be truly cross-platform, supporting:
 - **Linux** (Raspberry Pi, BeagleBone, etc.) via `periph.io`.
 - **Microcontrollers** (Pico 2, ESP32, Arduino Nano RP2040, etc.) via **TinyGo**.
