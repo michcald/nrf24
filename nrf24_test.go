@@ -2,8 +2,14 @@ package nrf24
 
 import (
 	"bytes"
+	"os"
 	"testing"
 )
+
+func TestMain(m *testing.M) {
+	SetLogger(&nopLogger{})
+	os.Exit(m.Run())
+}
 
 // --- Mocks ---
 
@@ -68,16 +74,20 @@ func (m *mockSPIConn) queueRx(data []byte) {
 // --- Tests ---
 
 func TestInitialization(t *testing.T) {
+	SetLogger(&nopLogger{})
 	// Setup Mocks
 	mockSPI := &mockSPIConn{}
 	mockCE := &mockPin{}
 	mockIRQ := &mockPin{}
 
 	// Config
-	cfg := Config{
-		ChannelNumber: 76,
-		RxAddr:        Address{0xE7, 0xE7, 0xE7, 0xE7, 0xE7},
-		Logger:        &nopLogger{}, // Silence logs
+	cfg := HardwareConfig{
+		RadioConfig: RadioConfig{
+			ChannelNumber: 76,
+			RxAddr:        Address{0xE7, 0xE7, 0xE7, 0xE7, 0xE7},
+		},
+		CE:  mockCE,
+		IRQ: mockIRQ,
 	}
 
 	// Queue responses for Init sequence (16 writes + 1 read)
@@ -88,7 +98,7 @@ func TestInitialization(t *testing.T) {
 	mockSPI.queueRx([]byte{0x00, 76})
 
 	// Call NewWithHardware
-	dev, err := NewWithHardware(cfg, mockSPI, mockCE, mockIRQ)
+	dev, err := NewWithHardware(cfg, mockSPI)
 	if err != nil {
 		t.Fatalf("NewWithHardware failed: %v", err)
 	}
@@ -129,9 +139,11 @@ func TestInitialization(t *testing.T) {
 func TestTransmit(t *testing.T) {
 	mockSPI := &mockSPIConn{}
 	mockCE := &mockPin{}
-	cfg := Config{Logger: &nopLogger{}}
+	cfg := HardwareConfig{
+		CE: mockCE,
+	}
 	
-	dev, _ := NewWithHardware(cfg, mockSPI, mockCE, nil)
+	dev, _ := NewWithHardware(cfg, mockSPI)
 	
 	// Reset TX buffer to clear init commands
 	mockSPI.tx = nil
@@ -181,8 +193,10 @@ func TestTransmit(t *testing.T) {
 func TestTransmitFailure(t *testing.T) {
 	mockSPI := &mockSPIConn{}
 	mockCE := &mockPin{}
-	cfg := Config{Logger: &nopLogger{}}
-	dev, _ := NewWithHardware(cfg, mockSPI, mockCE, nil)
+	cfg := HardwareConfig{
+		CE: mockCE,
+	}
+	dev, _ := NewWithHardware(cfg, mockSPI)
 
 	// Test Case 1: Max Retries reached (_MAX_RT = 0x10)
 	mockSPI.tx = nil
@@ -225,12 +239,14 @@ func TestReceive(t *testing.T) {
 	mockSPI := &mockSPIConn{}
 	mockCE := &mockPin{}
 	// Enable dynamic payload for simpler testing (no padding check needed)
-	cfg := Config{
-		Logger:               &nopLogger{},
-		EnableDynamicPayload: true,
+	cfg := HardwareConfig{
+		RadioConfig: RadioConfig{
+			EnableDynamicPayload: true,
+		},
+		CE: mockCE,
 	}
 	
-	dev, _ := NewWithHardware(cfg, mockSPI, mockCE, nil)
+	dev, _ := NewWithHardware(cfg, mockSPI)
 	mockSPI.tx = nil
 
 	// Simulation for Receive():
@@ -265,8 +281,10 @@ func TestReceive(t *testing.T) {
 
 func TestConfiguration(t *testing.T) {
 	mockSPI := &mockSPIConn{}
-	cfg := Config{Logger: &nopLogger{}}
-	dev, _ := NewWithHardware(cfg, mockSPI, &mockPin{}, nil)
+	cfg := HardwareConfig{
+		CE: &mockPin{},
+	}
+	dev, _ := NewWithHardware(cfg, mockSPI)
 
 	// Test SetChannel
 	mockSPI.tx = nil
@@ -289,11 +307,13 @@ func TestConfiguration(t *testing.T) {
 
 func TestOpenRxPipe(t *testing.T) {
 	mockSPI := &mockSPIConn{}
-	cfg := Config{
-		Logger:        &nopLogger{},
-		EnableAutoAck: true,
+	cfg := HardwareConfig{
+		RadioConfig: RadioConfig{
+			EnableAutoAck: true,
+		},
+		CE: &mockPin{},
 	}
-	dev, _ := NewWithHardware(cfg, mockSPI, &mockPin{}, nil)
+	dev, _ := NewWithHardware(cfg, mockSPI)
 
 	// Test Pipe 1 (Full Address)
 	mockSPI.tx = nil
@@ -334,12 +354,14 @@ func TestOpenRxPipe(t *testing.T) {
 
 func TestReceiveFixed(t *testing.T) {
 	mockSPI := &mockSPIConn{}
-	cfg := Config{
-		Logger:               &nopLogger{},
-		EnableDynamicPayload: false,
-		PayloadSize:          5,
+	cfg := HardwareConfig{
+		RadioConfig: RadioConfig{
+			EnableDynamicPayload: false,
+			PayloadSize:          5,
+		},
+		CE: &mockPin{},
 	}
-	dev, _ := NewWithHardware(cfg, mockSPI, &mockPin{}, nil)
+	dev, _ := NewWithHardware(cfg, mockSPI)
 	mockSPI.tx = nil
 
 	// Simulation for Receive() with Fixed Payload:
@@ -365,8 +387,10 @@ func TestReceiveFixed(t *testing.T) {
 
 func TestCloseRxPipe(t *testing.T) {
 	mockSPI := &mockSPIConn{}
-	cfg := Config{Logger: &nopLogger{}}
-	dev, _ := NewWithHardware(cfg, mockSPI, &mockPin{}, nil)
+	cfg := HardwareConfig{
+		CE: &mockPin{},
+	}
+	dev, _ := NewWithHardware(cfg, mockSPI)
 	mockSPI.tx = nil
 	mockSPI.rxQueue = nil
 
@@ -395,8 +419,10 @@ func TestCloseRxPipe(t *testing.T) {
 
 func TestDiagnostics(t *testing.T) {
 	mockSPI := &mockSPIConn{}
-	cfg := Config{Logger: &nopLogger{}}
-	dev, _ := NewWithHardware(cfg, mockSPI, &mockPin{}, nil)
+	cfg := HardwareConfig{
+		CE: &mockPin{},
+	}
+	dev, _ := NewWithHardware(cfg, mockSPI)
 	
 	// 1. FlushTX
 	mockSPI.tx = nil

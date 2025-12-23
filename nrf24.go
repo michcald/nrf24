@@ -156,10 +156,7 @@ const _MAX_PAYLOAD_BYTES = 32
 
 const _R_RX_PL_WID = 0x60
 
-type Config struct {
-	// Logger is the logger instance to use.
-	// If nil, a default logger using the standard library "log" package is used.
-	Logger Logger
+type RadioConfig struct {
 	// ChannelNumber determines the specific radio frequency within the 2.4 GHz ISM band that your module will use to
 	// transmit and listen for data. The range is between 0 to 124.
 	// Channel numbers like 70-80 (around 2470-2480 MHz) are often good choices because they sit above the main Wi-Fi
@@ -167,18 +164,6 @@ type Config struct {
 	ChannelNumber byte
 	// RxAddr is the address of this radio module in order to receive messages.
 	RxAddr Address
-	// CePin is the GPIO pin number (BCM numbering) for the Chip Enable (CE) pin.
-	// Defaults to 25 if not provided.
-	CePin int
-	// IrqPin is the GPIO pin number (BCM numbering) for the Interrupt Request (IRQ) pin.
-	// Optional. If not provided, polling is used.
-	IrqPin int
-	// SpiBusPath is the path to the SPI bus (e.g., "/dev/spidev0.0").
-	// Defaults to "/dev/spidev0.0" if not provided.
-	SpiBusPath string
-	// SpiClockHz is the SPI clock frequency in Hz.
-	// Defaults to 1000000 (1MHz) if not provided.
-	SpiClockHz int
 	// EnableDynamicPayload enables or disables dynamic packet size.
 	// Defaults to false (disabled) if not provided.
 	EnableDynamicPayload bool
@@ -213,12 +198,18 @@ type Config struct {
 	CRCLength CRCLength
 }
 
+type HardwareConfig struct {
+	RadioConfig
+	// CE is the Chip Enable pin interface.
+	CE Pin
+	// IRQ is the Interrupt Request pin interface.
+	// Optional. If not provided, polling is used.
+	IRQ Pin
+}
+
 type Device struct {
-	config  Config
-	logger  Logger
+	config  HardwareConfig
 	conn    SPI
-	ce      Pin
-	irq     Pin
 	irqChan chan struct{}
 	nrfPort io.Closer
 	mu      sync.Mutex
@@ -226,7 +217,7 @@ type Device struct {
 }
 
 // NewWithHardware creates and initializes a new NRF24L01 driver with the provided hardware interfaces.
-func NewWithHardware(c Config, conn SPI, ce Pin, irq Pin) (*Device, error) {
+func NewWithHardware(c HardwareConfig, conn SPI) (*Device, error) {
 	if !c.EnableDynamicPayload && (c.PayloadSize == 0 || c.PayloadSize > 32) {
 		c.PayloadSize = 32
 	}
@@ -256,17 +247,13 @@ func NewWithHardware(c Config, conn SPI, ce Pin, irq Pin) (*Device, error) {
 		c.CRCLength = CRCLength16
 	}
 
-	logger := c.Logger
-	if logger == nil {
-		logger = &stdLogger{}
+	if c.CE == nil {
+		return nil, fmt.Errorf("CE pin not configured")
 	}
 
 	dev := &Device{
 		config: c,
-		logger: logger,
 		conn:   conn,
-		ce:     ce,
-		irq:    irq,
 	}
 
 	// --- Hardware Initialization ---
@@ -275,17 +262,17 @@ func NewWithHardware(c Config, conn SPI, ce Pin, irq Pin) (*Device, error) {
 		return nil, fmt.Errorf("channel number must be between 0 and 124")
 	}
 
-	dev.logger.Infof("Initializing NRF24L01 SPI communication...")
+	globalLogger.Info("Initializing NRF24L01 SPI communication...")
 
 	// Setup CE
-	dev.ce.Out(Low)
+	dev.config.CE.Out(Low)
 
 	// Setup IRQ if provided
-	if dev.irq != nil {
-		dev.irq.In(PullUp)
+	if dev.config.IRQ != nil {
+		dev.config.IRQ.In(PullUp)
 		dev.irqChan = make(chan struct{}, 1)
 		// Watch starts a goroutine that calls the handler on edge
-		err := dev.irq.Watch(FallingEdge, func() {
+		err := dev.config.IRQ.Watch(FallingEdge, func() {
 			select {
 			case dev.irqChan <- struct{}{}:
 			default:
@@ -383,10 +370,10 @@ func NewWithHardware(c Config, conn SPI, ce Pin, irq Pin) (*Device, error) {
 	readChannel := dev.readRegister(_RF_CH)
 	if readChannel != dev.config.ChannelNumber {
 		dev.Close()
-		return nil, fmt.Errorf("failed to verify NRF24L01 connection: read channel %d, expected %d - check wiring/power", readChannel, dev.config.ChannelNumber)
+		return nil, fmt.Errorf("failed to verify NRF24L01 connection: check wiring/power")
 	}
 
-	dev.logger.Infof("NRF24L01 initialized and powered up. Ready to operate.")
+	globalLogger.Info("NRF24L01 initialized and powered up. Ready to operate.")
 
 	// Set CE high to start listening ONLY after full configuration
 	dev.setCE(true)
@@ -418,21 +405,21 @@ func (dev *Device) Close() error {
 	// 1. Power down
 	// We duplicate logic here to avoid deadlock if we called PowerDown() which locks
 	dev.writeRegister(_CONFIG, dev.readRegister(_CONFIG)&^byte(_PWR_UP))
-	dev.logger.Infof("NRF24L01 powered down.")
+	globalLogger.Info("NRF24L01 powered down.")
 
 	// 2. Clean up SPI
 	if dev.nrfPort != nil {
 		if err := dev.nrfPort.Close(); err != nil {
-			dev.logger.Warnf("Failed to close SPI port: %v", err)
+			globalLogger.Warn("Failed to close SPI port")
 		}
-		dev.logger.Infof("SPI bus closed.")
+		globalLogger.Info("SPI bus closed.")
 	}
 
 	// 3. Clean up GPIO
-	if dev.irq != nil {
-		dev.irq.Unwatch()
+	if dev.config.IRQ != nil {
+		dev.config.IRQ.Unwatch()
 	}
-	dev.logger.Infof("GPIO interface closed.")
+	globalLogger.Info("GPIO interface closed.")
 
 	return nil
 }
@@ -444,7 +431,7 @@ func (d *Device) spiTransfer(len int) (status byte, response []byte) {
 	// We use the same slice for read and write
 	slice := d.scratch[:len]
 	if err := d.conn.Tx(slice, slice); err != nil {
-		d.logger.Errorf("SPI Transfer Error: %v", err)
+		globalLogger.Error("SPI Transfer Error")
 		return 0, nil
 	}
 
@@ -492,9 +479,9 @@ func (d *Device) clearStatus() {
 
 func (d *Device) setCE(level bool) {
 	if level {
-		d.ce.Out(High)
+		d.config.CE.Out(High)
 	} else {
-		d.ce.Out(Low)
+		d.config.CE.Out(Low)
 	}
 }
 
@@ -1032,15 +1019,15 @@ func (dev *Device) Receive() ([]byte, bool) {
 
 // WaitForInterrupt blocks until the IRQ pin goes low (active) or the context is cancelled.
 // It returns the content of the STATUS register.
-// If IrqPin is not configured, it returns an error.
+// If IRQPin is not configured, it returns an error.
 // This method is concurrent safe.
 func (d *Device) WaitForInterrupt(ctx context.Context) (byte, error) {
-	if d.irq == nil {
+	if d.config.IRQ == nil {
 		return 0, fmt.Errorf("IRQ pin not configured")
 	}
 
 	// Check if interrupt is already active (low = false)
-	if d.irq.Read() == Low {
+	if d.config.IRQ.Read() == Low {
 		d.mu.Lock()
 		status := d.readRegister(_STATUS)
 		d.mu.Unlock()
@@ -1078,7 +1065,7 @@ func (d *Device) ReceiveBlocking(ctx context.Context) ([]byte, error) {
 		}
 
 		// 2. Wait for data
-		if d.irq != nil {
+		if d.config.IRQ != nil {
 			status, err := d.WaitForInterrupt(ctx)
 			if err != nil {
 				return nil, err
@@ -1131,10 +1118,10 @@ func (d *Device) Ping(_ context.Context, addr Address) (bool, error) {
 	err := d.write([]byte{0x00}, false)
 
 	if err == nil {
-		d.logger.Infof("Ping Success: Receiver found at %v", addr)
+		globalLogger.Info("Ping Success")
 		return true, nil
 	}
 	
-	d.logger.Infof("Ping Failed: No receiver at %v (%v)", addr, err)
+	globalLogger.Info("Ping Failed")
 	return false, nil
 }

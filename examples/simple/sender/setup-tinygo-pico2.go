@@ -23,19 +23,20 @@ func Setup() (*nrf24.Device, error) {
 	}
 
 	config := nrf24.Config{
-		ChannelNumber:        76,
-		DataRate:             nrf24.DataRate1mbps,
-		EnableAutoAck:        true,
-		EnableDynamicPayload: true,
-		RxAddr:               nrf24.Address{0xD7, 0xD7, 0xD7, 0xD7, 0xD7},
+		RadioConfig: nrf24.RadioConfig{
+			ChannelNumber:        76,
+			DataRate:             nrf24.DataRate1mbps,
+			EnableAutoAck:        true,
+			EnableDynamicPayload: true,
+			RxAddr:               nrf24.Address{0xD7, 0xD7, 0xD7, 0xD7, 0xD7},
+		},
+		SPI:    machine.SPI0,
+		CSPin:  machine.GP17,
+		CEPin:  machine.GP20,
+		IRQPin: machine.GP21,
 	}
 
-	// Pins for Pico 2
-	csPin := machine.GP17
-	cePin := machine.GP20
-	irqPin := machine.GP21
-
-	radio, err := nrf24.NewTinyGo(config, machine.SPI0, csPin, cePin, irqPin)
+	radio, err := nrf24.New(config)
 	if err != nil {
 		machine.Serial.Write([]byte("Failed to initialize radio\r\n"))
 		return nil, err

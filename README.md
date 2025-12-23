@@ -5,6 +5,8 @@
 
 A robust, idiomatic, and concurrent-safe Go library for interfacing with the nRF24L01+ 2.4GHz wireless transceiver.
 
+> **Note:** This library is under active development. Until v1.0.0, the public API may change.
+
 **nrf24** is designed from the ground up to be truly cross-platform, supporting:
 - **Linux** (Raspberry Pi, BeagleBone, etc.) via `periph.io`.
 - **Microcontrollers** (Pico 2, ESP32, Arduino Nano RP2040, etc.) via **TinyGo**.
@@ -45,9 +47,11 @@ import (
 
 func main() {
 	config := nrf24.Config{
-		ChannelNumber: 76,
-		CePin:         25,
-		RxAddr:        nrf24.Address{0xE7, 0xE7, 0xE7, 0xE7, 0xE7},
+		RadioConfig: nrf24.RadioConfig{
+			ChannelNumber: 76,
+			RxAddr:        nrf24.Address{0xE7, 0xE7, 0xE7, 0xE7, 0xE7},
+		},
+		CEPin: 25,
 	}
 
 	radio, _ := nrf24.New(config)
@@ -71,19 +75,52 @@ import (
 )
 
 func main() {
-    config := nrf24.Config{
-        ChannelNumber: 76,
-    }
-    
     // Initialize hardware via machine package
     machine.SPI0.Configure(machine.SPIConfig{})
-    cePin := machine.GP25
-    irqPin := machine.GP24
     
-    radio, _ := nrf24.NewTinyGo(config, machine.SPI0, cePin, irqPin)
+    config := nrf24.Config{
+        RadioConfig: nrf24.RadioConfig{
+            ChannelNumber: 76,
+        },
+        SPI:    machine.SPI0,
+        CSPin:  machine.GP17,
+        CEPin:  machine.GP20,
+        IRQPin: machine.GP21,
+    }
+    
+    radio, _ := nrf24.New(config)
     
     radio.ReceiveBlocking(context.Background())
 }
+```
+
+## Logging
+
+The library uses a global logger to provide feedback on hardware initialization and communication status. The default logger behavior depends on your environment:
+
+- **Linux (!tinygo)**: Uses the standard `log` package, printing to `stdout`.
+- **TinyGo**: Uses `machine.Serial.Write` directly to output logs to the serial console, avoiding `fmt` package overhead.
+- **Tests**: Logging is disabled by default using a no-op logger.
+
+### Custom Logger
+
+You can provide your own logger implementation by satisfying the `Logger` interface and calling `SetLogger`:
+
+```go
+type MyLogger struct{}
+func (l *MyLogger) Debug(m string) { /* ... */ }
+func (l *MyLogger) Info(m string)  { /* ... */ }
+func (l *MyLogger) Warn(m string)  { /* ... */ }
+func (l *MyLogger) Error(m string) { /* ... */ }
+
+func init() {
+    nrf24.SetLogger(&MyLogger{})
+}
+```
+
+To disable logging entirely:
+```go
+nrf24.SetLogger(nil)
 ```
 
 ## Hardware Setup
