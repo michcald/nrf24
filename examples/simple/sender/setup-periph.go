@@ -21,7 +21,7 @@ func Setup() (*nrf24.Device, error) {
 			AutoRetransmitDelay:  500, // 500us
 			AutoRetransmitCount:  15,  // Max retries
 		},
-		CePin: 25,
+		CEPin: 25,
 	}
 
 	radio, err := nrf24.New(config)

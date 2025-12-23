@@ -1019,7 +1019,7 @@ func (dev *Device) Receive() ([]byte, bool) {
 
 // WaitForInterrupt blocks until the IRQ pin goes low (active) or the context is cancelled.
 // It returns the content of the STATUS register.
-// If IrqPin is not configured, it returns an error.
+// If IRQPin is not configured, it returns an error.
 // This method is concurrent safe.
 func (d *Device) WaitForInterrupt(ctx context.Context) (byte, error) {
 	if d.config.IRQ == nil {

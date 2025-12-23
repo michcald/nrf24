@@ -19,8 +19,8 @@ func Setup() (*nrf24.Device, error) {
 			EnableDynamicPayload: true,
 			RxAddr:               nrf24.Address{0xE7, 0xE7, 0xE7, 0xE7, 0xE7},
 		},
-		CePin:  25,
-		IrqPin: 24, // Using IRQ pin for interrupt-driven receive
+		CEPin:  25,
+		IRQPin: 24, // Using IRQ pin for interrupt-driven receive
 	}
 
 	radio, err := nrf24.New(config)

@@ -51,7 +51,7 @@ func main() {
 			ChannelNumber: 76,
 			RxAddr:        nrf24.Address{0xE7, 0xE7, 0xE7, 0xE7, 0xE7},
 		},
-		CePin: 25,
+		CEPin: 25,
 	}
 
 	radio, _ := nrf24.New(config)
@@ -99,7 +99,7 @@ func main() {
 The library uses a global logger to provide feedback on hardware initialization and communication status. The default logger behavior depends on your environment:
 
 - **Linux (!tinygo)**: Uses the standard `log` package, printing to `stdout`.
-- **TinyGo**: Uses `machine.Serial` via `fmt.Fprintf` to output logs to the serial console.
+- **TinyGo**: Uses `machine.Serial.Write` directly to output logs to the serial console, avoiding `fmt` package overhead.
 - **Tests**: Logging is disabled by default using a no-op logger.
 
 ### Custom Logger

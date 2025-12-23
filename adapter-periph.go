@@ -103,12 +103,12 @@ func (p *realPin) Unwatch() error {
 // Config holds the configuration for the Linux/periph.io driver.
 type Config struct {
 	RadioConfig
-	// CePin is the GPIO pin number (BCM numbering) for the Chip Enable (CE) pin.
+	// CEPin is the GPIO pin number (BCM numbering) for the Chip Enable (CE) pin.
 	// Defaults to 25 if not provided.
-	CePin int
-	// IrqPin is the GPIO pin number (BCM numbering) for the Interrupt Request (IRQ) pin.
+	CEPin int
+	// IRQPin is the GPIO pin number (BCM numbering) for the Interrupt Request (IRQ) pin.
 	// Optional. If not provided, polling is used.
-	IrqPin int
+	IRQPin int
 	// SpiBusPath is the path to the SPI bus (e.g., "/dev/spidev0.0").
 	// Defaults to "/dev/spidev0.0" if not provided.
 	SpiBusPath string
@@ -151,10 +151,10 @@ func New(c Config) (*Device, error) {
 	}
 
 	// 6. Setup CE Pin
-	if c.CePin == 0 {
-		c.CePin = 25
+	if c.CEPin == 0 {
+		c.CEPin = 25
 	}
-	ceName := fmt.Sprintf("GPIO%d", c.CePin)
+	ceName := fmt.Sprintf("GPIO%d", c.CEPin)
 	realCe := gpioreg.ByName(ceName)
 	if realCe == nil {
 		p.Close()
@@ -164,8 +164,8 @@ func New(c Config) (*Device, error) {
 
 	// 7. Setup IRQ Pin
 	var irqWrapper Pin
-	if c.IrqPin != 0 {
-		irqName := fmt.Sprintf("GPIO%d", c.IrqPin)
+	if c.IRQPin != 0 {
+		irqName := fmt.Sprintf("GPIO%d", c.IRQPin)
 		realIrq := gpioreg.ByName(irqName)
 		if realIrq == nil {
 			p.Close()
