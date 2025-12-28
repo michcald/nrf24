@@ -729,6 +729,7 @@ func (d *Device) updateRFSetup() error {
 func (d *Device) PowerDown() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.setCE(false)
 	d.writeRegister(_CONFIG, d.readRegister(_CONFIG)&^byte(_PWR_UP))
 }
 
@@ -741,6 +742,7 @@ func (d *Device) PowerUp() {
 	defer d.mu.Unlock()
 	d.writeRegister(_CONFIG, d.readRegister(_CONFIG)|_PWR_UP)
 	time.Sleep(2 * time.Millisecond) // Wait for oscillator stabilization
+	d.setCE(true)
 }
 
 func (d *Device) startListening() {
