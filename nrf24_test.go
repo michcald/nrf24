@@ -486,3 +486,68 @@ func TestDiagnostics(t *testing.T) {
 		t.Errorf("TransmitNoAck didn't send 0xB0 command. TX: %X", mockSPI.tx)
 	}
 }
+
+func TestPowerManagement(t *testing.T) {
+	mockSPI := &mockSPIConn{}
+	mockCE := &mockPin{}
+	cfg := HardwareConfig{
+		CE: mockCE,
+	}
+	dev, _ := NewWithHardware(cfg, mockSPI)
+
+	// Initial state: CE High (Listening)
+	if mockCE.level != High {
+		t.Errorf("Initial state: expected CE High, got %v", mockCE.level)
+	}
+
+	// PowerDown
+	mockSPI.tx = nil
+	mockSPI.rxQueue = nil
+	mockSPI.queueRx([]byte{0, 0xFF}) // Read Config (returns 0xFF)
+	mockSPI.queueRx([]byte{0})       // Write Config
+	
+	dev.PowerDown()
+
+	// Verify CE Low
+	if mockCE.level != Low {
+		t.Errorf("PowerDown: expected CE Low, got %v", mockCE.level)
+	}
+	// Verify PWR_UP cleared. 0xFF & ^0x02 = 0xFD.
+	// Write 0x20 -> 0xFD
+	if !bytes.Contains(mockSPI.tx, []byte{0x20 | _CONFIG, 0xFD}) {
+		t.Errorf("PowerDown: expected PWR_UP cleared, got TX: %X", mockSPI.tx)
+	}
+
+	// PowerUp
+	mockSPI.tx = nil
+	mockSPI.rxQueue = nil
+	mockSPI.queueRx([]byte{0, 0xFD}) // Read Config (returns 0xFD - PWR_UP=0, PRIM_RX=0)
+	mockSPI.queueRx([]byte{0})       // Write Config
+	mockSPI.queueRx([]byte{0})       // Clear Status (write STATUS)
+	mockSPI.queueRx([]byte{0})       // Flush RX
+	mockSPI.queueRx([]byte{0})       // Flush TX
+	
+	dev.PowerUp()
+
+	// Verify PWR_UP and PRIM_RX set.
+	if !bytes.Contains(mockSPI.tx, []byte{0x20 | _CONFIG, 0xFF}) {
+		t.Errorf("PowerUp: expected PWR_UP and PRIM_RX set, got TX: %X", mockSPI.tx)
+	}
+	// Verify Status Cleared
+	if !bytes.Contains(mockSPI.tx, []byte{0x20 | _STATUS, _RX_DR|_TX_DS|_MAX_RT}) {
+		t.Errorf("PowerUp: expected Status cleared, got TX: %X", mockSPI.tx)
+	}
+	// Verify Flush RX
+	if !bytes.Contains(mockSPI.tx, []byte{_FLUSH_RX}) {
+		t.Errorf("PowerUp: expected Flush RX, got TX: %X", mockSPI.tx)
+	}
+	// Verify Flush TX
+	if !bytes.Contains(mockSPI.tx, []byte{_FLUSH_TX}) {
+		t.Errorf("PowerUp: expected Flush TX, got TX: %X", mockSPI.tx)
+	}
+
+	// Verify CE High (Restored to Listening)
+	if mockCE.level != High {
+		t.Errorf("PowerUp: expected CE High, got %v", mockCE.level)
+	}
+}
