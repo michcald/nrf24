@@ -524,18 +524,26 @@ func TestPowerManagement(t *testing.T) {
 	mockSPI.queueRx([]byte{0, 0xFD}) // Read Config (returns 0xFD - PWR_UP=0, PRIM_RX=0)
 	mockSPI.queueRx([]byte{0})       // Write Config
 	mockSPI.queueRx([]byte{0})       // Clear Status (write STATUS)
+	mockSPI.queueRx([]byte{0})       // Flush RX
+	mockSPI.queueRx([]byte{0})       // Flush TX
 	
 	dev.PowerUp()
 
-	// Verify PWR_UP and PRIM_RX set. 0xFD | 0x02 | 0x01 = 0xFF.
-	// Write 0x20 -> 0xFF
+	// Verify PWR_UP and PRIM_RX set.
 	if !bytes.Contains(mockSPI.tx, []byte{0x20 | _CONFIG, 0xFF}) {
 		t.Errorf("PowerUp: expected PWR_UP and PRIM_RX set, got TX: %X", mockSPI.tx)
 	}
-	
-	// Verify Status Cleared (Command 0x27 with value 0x70)
+	// Verify Status Cleared
 	if !bytes.Contains(mockSPI.tx, []byte{0x20 | _STATUS, _RX_DR|_TX_DS|_MAX_RT}) {
 		t.Errorf("PowerUp: expected Status cleared, got TX: %X", mockSPI.tx)
+	}
+	// Verify Flush RX
+	if !bytes.Contains(mockSPI.tx, []byte{_FLUSH_RX}) {
+		t.Errorf("PowerUp: expected Flush RX, got TX: %X", mockSPI.tx)
+	}
+	// Verify Flush TX
+	if !bytes.Contains(mockSPI.tx, []byte{_FLUSH_TX}) {
+		t.Errorf("PowerUp: expected Flush TX, got TX: %X", mockSPI.tx)
 	}
 
 	// Verify CE High (Restored to Listening)

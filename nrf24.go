@@ -743,8 +743,13 @@ func (d *Device) PowerUp() {
 	// Ensure we wake up in RX mode (PRIM_RX) with Power Up (PWR_UP)
 	d.writeRegister(_CONFIG, d.readRegister(_CONFIG)|_PWR_UP|_PRIM_RX)
 	time.Sleep(5 * time.Millisecond) // Wait for oscillator stabilization (up to 4.5ms)
-	d.clearStatus()                  // Clear any stale interrupts
-	d.setCE(true)                    // Enter RX Mode
+	
+	// "Nuclear" cleanup to ensure we are 100% ready to receive
+	d.clearStatus() // Clear any stale interrupts
+	d.flushRX()     // Clear any garbage in RX FIFO
+	d.flushTX()     // Clear any garbage in TX FIFO
+	
+	d.setCE(true)   // Enter RX Mode
 }
 
 func (d *Device) startListening() {
