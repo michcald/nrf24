@@ -486,3 +486,54 @@ func TestDiagnostics(t *testing.T) {
 		t.Errorf("TransmitNoAck didn't send 0xB0 command. TX: %X", mockSPI.tx)
 	}
 }
+
+func TestPowerManagement(t *testing.T) {
+	mockSPI := &mockSPIConn{}
+	mockCE := &mockPin{}
+	cfg := HardwareConfig{
+		CE: mockCE,
+	}
+	dev, _ := NewWithHardware(cfg, mockSPI)
+
+	// Initial state: CE High (Listening)
+	if mockCE.level != High {
+		t.Errorf("Initial state: expected CE High, got %v", mockCE.level)
+	}
+
+	// PowerDown
+	mockSPI.tx = nil
+	mockSPI.rxQueue = nil
+	mockSPI.queueRx([]byte{0, 0xFF}) // Read Config (returns 0xFF)
+	mockSPI.queueRx([]byte{0})       // Write Config
+	
+	dev.PowerDown()
+
+	// Verify CE Low
+	if mockCE.level != Low {
+		t.Errorf("PowerDown: expected CE Low, got %v", mockCE.level)
+	}
+	// Verify PWR_UP cleared. 0xFF & ^0x02 = 0xFD.
+	// Write 0x20 -> 0xFD
+	if !bytes.Contains(mockSPI.tx, []byte{0x20 | _CONFIG, 0xFD}) {
+		t.Errorf("PowerDown: expected PWR_UP cleared, got TX: %X", mockSPI.tx)
+	}
+
+	// PowerUp
+	mockSPI.tx = nil
+	mockSPI.rxQueue = nil
+	mockSPI.queueRx([]byte{0, 0xFD}) // Read Config (returns 0xFD)
+	mockSPI.queueRx([]byte{0})       // Write Config
+	
+	dev.PowerUp()
+
+	// Verify PWR_UP set. 0xFD | 0x02 = 0xFF.
+	// Write 0x20 -> 0xFF
+    // Note: readRegister returns 0xFD (PWR_UP=0). OR with 0x02 -> 0xFF.
+	if !bytes.Contains(mockSPI.tx, []byte{0x20 | _CONFIG, 0xFF}) {
+		t.Errorf("PowerUp: expected PWR_UP set, got TX: %X", mockSPI.tx)
+	}
+	// Verify CE High (Restored to Listening)
+	if mockCE.level != High {
+		t.Errorf("PowerUp: expected CE High, got %v", mockCE.level)
+	}
+}
