@@ -734,15 +734,17 @@ func (d *Device) PowerDown() {
 }
 
 // PowerUp wakes the NRF24L01 from Power Down mode.
-// After calling PowerUp, it takes approximately 1.5ms for the crystal oscillator to stabilize
+// After calling PowerUp, it takes approximately 5ms for the crystal oscillator to stabilize
 // before the radio can enter Standby or RX/TX modes.
 // This method is concurrent safe.
 func (d *Device) PowerUp() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.writeRegister(_CONFIG, d.readRegister(_CONFIG)|_PWR_UP)
-	time.Sleep(2 * time.Millisecond) // Wait for oscillator stabilization
-	d.setCE(true)
+	// Ensure we wake up in RX mode (PRIM_RX) with Power Up (PWR_UP)
+	d.writeRegister(_CONFIG, d.readRegister(_CONFIG)|_PWR_UP|_PRIM_RX)
+	time.Sleep(5 * time.Millisecond) // Wait for oscillator stabilization (up to 4.5ms)
+	d.clearStatus()                  // Clear any stale interrupts
+	d.setCE(true)                    // Enter RX Mode
 }
 
 func (d *Device) startListening() {

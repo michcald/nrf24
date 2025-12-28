@@ -521,17 +521,23 @@ func TestPowerManagement(t *testing.T) {
 	// PowerUp
 	mockSPI.tx = nil
 	mockSPI.rxQueue = nil
-	mockSPI.queueRx([]byte{0, 0xFD}) // Read Config (returns 0xFD)
+	mockSPI.queueRx([]byte{0, 0xFD}) // Read Config (returns 0xFD - PWR_UP=0, PRIM_RX=0)
 	mockSPI.queueRx([]byte{0})       // Write Config
+	mockSPI.queueRx([]byte{0})       // Clear Status (write STATUS)
 	
 	dev.PowerUp()
 
-	// Verify PWR_UP set. 0xFD | 0x02 = 0xFF.
+	// Verify PWR_UP and PRIM_RX set. 0xFD | 0x02 | 0x01 = 0xFF.
 	// Write 0x20 -> 0xFF
-    // Note: readRegister returns 0xFD (PWR_UP=0). OR with 0x02 -> 0xFF.
 	if !bytes.Contains(mockSPI.tx, []byte{0x20 | _CONFIG, 0xFF}) {
-		t.Errorf("PowerUp: expected PWR_UP set, got TX: %X", mockSPI.tx)
+		t.Errorf("PowerUp: expected PWR_UP and PRIM_RX set, got TX: %X", mockSPI.tx)
 	}
+	
+	// Verify Status Cleared (Command 0x27 with value 0x70)
+	if !bytes.Contains(mockSPI.tx, []byte{0x20 | _STATUS, _RX_DR|_TX_DS|_MAX_RT}) {
+		t.Errorf("PowerUp: expected Status cleared, got TX: %X", mockSPI.tx)
+	}
+
 	// Verify CE High (Restored to Listening)
 	if mockCE.level != High {
 		t.Errorf("PowerUp: expected CE High, got %v", mockCE.level)
