@@ -741,6 +741,14 @@ func (d *Device) PowerUp() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	// Check if already powered up and in RX mode to avoid resetting
+	config := d.readRegister(_CONFIG)
+	if config&(_PWR_UP|_PRIM_RX) == (_PWR_UP | _PRIM_RX) {
+		// Already active, just ensure CE is high
+		d.setCE(true)
+		return
+	}
+
 	d.setCE(false) // Ensure CE is Low before config
 
 	// Ensure we wake up in RX mode (PRIM_RX) with Power Up (PWR_UP)
